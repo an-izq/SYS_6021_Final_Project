@@ -1,0 +1,428 @@
+---
+title: "SYS 6021 Final Project"
+author: "Andres Izquierdo"
+date: "12/6/2021"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include = FALSE}
+# loading packages
+
+library(dplyr)
+library(data.table)
+library(tidyverse)
+library(plyr)
+library(ggplot2)
+library(ggpubr)
+library(MASS)
+library(psych)
+library(ggfortify)
+library(ggResidpanel)
+library(readr)
+library(formatR)
+library(GGally)
+library(reshape2)
+library(lme4)
+library(compiler)
+library(parallel)
+library(boot)
+library(lattice)
+library(Lahman)
+
+tidy=TRUE
+
+# specifying files and directories
+datadir <- "~/UVA SYS ME/SYS 6021 STATISTICAL MODELING I/Final Project/Data Sets/Lahman-master/data"
+
+source("~/UVA SYS ME/SYS 6021 STATISTICAL MODELING I/R/SOURCE/PCAplots.R")
+source("~/UVA SYS ME/SYS 6021 STATISTICAL MODELING I/R/SOURCE/FactorPlots.R")
+source("~/UVA SYS ME/SYS 6021 STATISTICAL MODELING I/R/SOURCE/pc.glm.R")
+source("~/UVA SYS ME/SYS 6021 STATISTICAL MODELING I/R/SOURCE/ROC.R")
+source("~/UVA SYS ME/SYS 6021 STATISTICAL MODELING I/R/SOURCE/TestSet.R")
+
+load("~/UVA SYS ME/SYS 6021 STATISTICAL MODELING I/Final Project/Data Sets/Lahman-master/data/Pitching.RData")
+load("~/UVA SYS ME/SYS 6021 STATISTICAL MODELING I/Final Project/Data Sets/Lahman-master/data/AwardsPlayers.RData")
+load("~/UVA SYS ME/SYS 6021 STATISTICAL MODELING I/Final Project/Data Sets/Lahman-master/data/HallOfFame.RData")
+load("~/UVA SYS ME/SYS 6021 STATISTICAL MODELING I/Final Project/Data Sets/Lahman-master/data/AwardsSharePlayers.RData")
+load("~/UVA SYS ME/SYS 6021 STATISTICAL MODELING I/Final Project/Data Sets/Lahman-master/data/Allstarfull.RData")
+```
+
+# 1. Introduction
+
+This project will be exploring Major League Baseball (MLB) data using Lahman's Baseball Database which contains complete batting and pitching statistics from 1871 to 2020, plus fielding statistics, standings, team stats, managerial records, post-season data, and more. This project will look at career pitching statistics in particular and come up with which variables will be best for using as predictors, using binary logistic regression, in determining which current pitchers will be inducted into the Hall of Fame (HOF). The motivation behind this project besides being a big baseball fan is to use the logistic model with the best indicators to determine which of the best current pitchers will be inducted into the hall of fame. Baseball is known as a numbers game, with analytics influencing every decision in the league, the most famous example being Michael Lewis' book "Moneyball: The Art of Winning an Unfair Game" which was adapted into a movie. In the following sections the data used from these databases will be cleaned and formatted before using visualization analysis to come up with the hypothesis of this project to test and perform analysis on. 
+
+# 2. Analysis
+## Data Cleaning
+```{r, tidy=TRUE, tidy.opts=list(width.cutoff=60)}
+# Dataframe variable meanings can be found here on http://www.seanlahman.com/files/database/readme2017.txt on "2.3 Pitching Table".
+
+
+Pitcher <- Pitching %>% distinct(playerID, .keep_all = TRUE) 
+
+# Getting rid of any na Values, this removes all data before 1973 as the stat GIDP was not counted before then.
+pitch.complete <- na.omit(Pitching) 
+# Changing the stint column into the seasons column to count how many seasons each pitcher has.
+pitch.complete$stint <- 1
+names(pitch.complete)[3] <- 'Seasons' 
+
+# Mutating all rows to be the career statistics for each pitcher.
+df <- group_by(pitch.complete, playerID) 
+pitchers <- df %>% mutate(Seasons = sum(Seasons), W = sum(W), L = sum(L), G = sum(G), GS = sum(GS), CG = sum(CG), SHO = sum(SHO), SV = sum(SV), IPouts = sum(IPouts), H = sum(H), ER = sum(ER), HR = sum(HR), BB = sum(BB), SO = sum(SO), BAOpp = mean(BAOpp), ERA = mean(ERA), IBB = sum(IBB), WP = sum(WP), HBP = sum(HBP), BK = sum(BK), BFP = sum(BFP), GF = sum(GF), R = sum(R), SH = sum(SH), SF = sum(SF), GIDP = sum(GIDP)) 
+
+# Removing all duplicate names since we are only looking at each pitchers career statistic.
+Pitcher.Career.Statistics <- pitchers %>% distinct(playerID, .keep_all = TRUE) 
+
+# Filtering put Hall Of Fame dataframe to include Players only.
+HoFers <- HallOfFame %>% filter(category == 'Player', inducted == 'Y') 
+
+# Adding HOF indicator into main Data Frame.
+Pitcher.Career.Statistics <- Pitcher.Career.Statistics %>% left_join(HoFers, by="playerID") 
+
+# Removing unecessary columns.
+Pitcher.Career.Statistics <- subset(Pitcher.Career.Statistics, select = -c(yearID.y, votedBy, ballots, needed, votes, needed_note,category,yearID.x,teamID,lgID) ) 
+
+# Replacing NA's with N since the pitcher has not goten into the HOF either because the pitcher was not eligible, not voted in, or is still an active player.
+Pitcher.Career.Statistics <- Pitcher.Career.Statistics %>% replace_na(list(inducted = "N"))
+
+# Turning HOF indicator into 1,0
+Pitcher.Career.Statistics$inducted<-ifelse(Pitcher.Career.Statistics$inducted=="Y",1,0) 
+```
+
+## Vizualization
+```{r, tidy=TRUE, tidy.opts=list(width.cutoff=60)}
+# Proportion of pitchers in the hall of fame.
+sum(Pitcher.Career.Statistics[,28])/nrow(Pitcher.Career.Statistics)
+sum(Pitcher.Career.Statistics[,28]) 
+nrow(Pitcher.Career.Statistics)
+
+# CG, W, SHO, and IPouts are the most correlated with the inducted response variable in this scatterplot matrix.
+pairs.panels(Pitcher.Career.Statistics[,c(2:11,28)]) 
+# SO and BB are the most correlated with the inducted response variable in this scatterplot matrix.
+pairs.panels(Pitcher.Career.Statistics[,c(12:21,28)]) 
+# SH and BFP are the most correlated with the inducted response variable in this scatterplot matrix.
+pairs.panels(Pitcher.Career.Statistics[,c(22:27,28)]) 
+
+
+Pitcher.Career.Statistics.vi <- copy(Pitcher.Career.Statistics)
+Pitcher.Career.Statistics.vi <- setnames(Pitcher.Career.Statistics.vi, old = c('Seasons','W','L','G','GS','CG','SHO','SV','IPouts','H','ER','HR','BB','SO','BAOpp','ERA','IBB','WP','HBP','BK','BFP','GF','R','SH','SF','GIDP','inducted'), new = c('v1','v2','v3','v4','v5','v6','v7','v8','v9','v10','v11','v12','v13','v14','v15','v16','v17','v18','v19','v20','v21','v22','v23','v24','v25','v26','v27'))
+
+# Setting up box plots.
+v1 <- ggplot(Pitcher.Career.Statistics.vi, aes(x=as.factor(Pitcher.Career.Statistics.vi$v27), y=v1)) + 
+  geom_boxplot(fill= "steelblue") +labs(x = "Inducted in HOF")+labs(y = "Seasons")
+v2 <- ggplot(Pitcher.Career.Statistics.vi, aes(x=as.factor(Pitcher.Career.Statistics.vi$v27), y=v2)) + 
+  geom_boxplot(fill= "steelblue") +labs(x = "Inducted in HOF")+labs(y = "W")
+v3 <- ggplot(Pitcher.Career.Statistics.vi, aes(x=as.factor(Pitcher.Career.Statistics.vi$v27), y=v3)) + 
+  geom_boxplot(fill= "steelblue") +labs(x = "Inducted in HOF")+labs(y = "L")
+v4 <- ggplot(Pitcher.Career.Statistics.vi, aes(x=as.factor(Pitcher.Career.Statistics.vi$v27), y=v4)) + 
+  geom_boxplot(fill= "steelblue") +labs(x = "Inducted in HOF")+labs(y = "G")
+v5 <- ggplot(Pitcher.Career.Statistics.vi, aes(x=as.factor(Pitcher.Career.Statistics.vi$v27), y=v5)) + 
+  geom_boxplot(fill= "steelblue") +labs(x = "Inducted in HOF")+labs(y = "GS")
+v6 <- ggplot(Pitcher.Career.Statistics.vi, aes(x=as.factor(Pitcher.Career.Statistics.vi$v27), y=v6)) + 
+  geom_boxplot(fill= "steelblue") +labs(x = "Inducted in HOF")+labs(y = "CG")
+v7 <- ggplot(Pitcher.Career.Statistics.vi, aes(x=as.factor(Pitcher.Career.Statistics.vi$v27), y=v7)) + 
+  geom_boxplot(fill= "steelblue") +labs(x = "Inducted in HOF")+labs(y = "SHO")
+v8 <- ggplot(Pitcher.Career.Statistics.vi, aes(x=as.factor(Pitcher.Career.Statistics.vi$v27), y=v8)) + 
+  geom_boxplot(fill= "steelblue") +labs(x = "Inducted in HOF")+labs(y = "SV")
+v9 <- ggplot(Pitcher.Career.Statistics.vi, aes(x=as.factor(Pitcher.Career.Statistics.vi$v27), y=v9)) + 
+  geom_boxplot(fill= "steelblue") +labs(x = "Inducted in HOF")+labs(y = "IPouts")
+v10 <- ggplot(Pitcher.Career.Statistics.vi, aes(x=as.factor(Pitcher.Career.Statistics.vi$v27), y=v10)) + 
+  geom_boxplot(fill= "steelblue") +labs(x = "Inducted in HOF")+labs(y = "H")
+v11 <- ggplot(Pitcher.Career.Statistics.vi, aes(x=as.factor(Pitcher.Career.Statistics.vi$v27), y=v11)) + 
+  geom_boxplot(fill= "steelblue") +labs(x = "Inducted in HOF")+labs(y = "ER")
+v12 <- ggplot(Pitcher.Career.Statistics.vi, aes(x=as.factor(Pitcher.Career.Statistics.vi$v27), y=v12)) + 
+  geom_boxplot(fill= "steelblue") +labs(x = "Inducted in HOF")+labs(y = "HR")
+v13 <- ggplot(Pitcher.Career.Statistics.vi, aes(x=as.factor(Pitcher.Career.Statistics.vi$v27), y=v13)) + 
+  geom_boxplot(fill= "steelblue") +labs(x = "Inducted in HOF")+labs(y = "BB")
+v14 <- ggplot(Pitcher.Career.Statistics.vi, aes(x=as.factor(Pitcher.Career.Statistics.vi$v27), y=v14)) + 
+  geom_boxplot(fill= "steelblue") +labs(x = "Inducted in HOF")+labs(y = "SO")
+v15 <- ggplot(Pitcher.Career.Statistics.vi, aes(x=as.factor(Pitcher.Career.Statistics.vi$v27), y=v15)) + 
+  geom_boxplot(fill= "steelblue") +labs(x = "Inducted in HOF")+labs(y = "BAOpp")
+v16 <- ggplot(Pitcher.Career.Statistics.vi, aes(x=as.factor(Pitcher.Career.Statistics.vi$v27), y=v16)) + 
+  geom_boxplot(fill= "steelblue") +labs(x = "Inducted in HOF")+labs(y = "ERA")
+v17 <- ggplot(Pitcher.Career.Statistics.vi, aes(x=as.factor(Pitcher.Career.Statistics.vi$v27), y=v17)) + 
+  geom_boxplot(fill= "steelblue") +labs(x = "Inducted in HOF")+labs(y = "IBB")
+v18 <- ggplot(Pitcher.Career.Statistics.vi, aes(x=as.factor(Pitcher.Career.Statistics.vi$v27), y=v18)) + 
+  geom_boxplot(fill= "steelblue") +labs(x = "Inducted in HOF")+labs(y = "WP")
+v19 <- ggplot(Pitcher.Career.Statistics.vi, aes(x=as.factor(Pitcher.Career.Statistics.vi$v27), y=v19)) + 
+  geom_boxplot(fill= "steelblue") +labs(x = "Inducted in HOF")+labs(y = "HBP")
+v20 <- ggplot(Pitcher.Career.Statistics.vi, aes(x=as.factor(Pitcher.Career.Statistics.vi$v27), y=v20)) + 
+  geom_boxplot(fill= "steelblue") +labs(x = "Inducted in HOF")+labs(y = "BK")
+v21 <- ggplot(Pitcher.Career.Statistics.vi, aes(x=as.factor(Pitcher.Career.Statistics.vi$v27), y=v21)) + 
+  geom_boxplot(fill= "steelblue") +labs(x = "Inducted in HOF")+labs(y = "BFP")
+v22 <- ggplot(Pitcher.Career.Statistics.vi, aes(x=as.factor(Pitcher.Career.Statistics.vi$v27), y=v22)) + 
+  geom_boxplot(fill= "steelblue") +labs(x = "Inducted in HOF")+labs(y = "GF")
+v23 <- ggplot(Pitcher.Career.Statistics.vi, aes(x=as.factor(Pitcher.Career.Statistics.vi$v27), y=v23)) + 
+  geom_boxplot(fill= "steelblue") +labs(x = "Inducted in HOF")+labs(y = "R")
+v24 <- ggplot(Pitcher.Career.Statistics.vi, aes(x=as.factor(Pitcher.Career.Statistics.vi$v27), y=v24)) + 
+  geom_boxplot(fill= "steelblue") +labs(x = "Inducted in HOF")+labs(y = "SH")
+v25 <- ggplot(Pitcher.Career.Statistics.vi, aes(x=as.factor(Pitcher.Career.Statistics.vi$v27), y=v25)) + 
+  geom_boxplot(fill= "steelblue") +labs(x = "Inducted in HOF")+labs(y = "SF")
+v26 <- ggplot(Pitcher.Career.Statistics.vi, aes(x=as.factor(Pitcher.Career.Statistics.vi$v27), y=v26)) + 
+  geom_boxplot(fill= "steelblue") +labs(x = "Inducted in HOF")+labs(y = "GIDP")
+
+
+# Arranging Box plots
+ggarrange(v1,v2,v3,v4,v5,v6,v7,v8,v9,ncol=3,nrow=3)
+ggarrange(v11,v12,v13,v14,v15,v16,v17,v18,v19,ncol=3,nrow=3)
+ggarrange(v21,v22,v23,v24,v25,v26,ncol=3,nrow=2)
+
+# Principal Component Analysis
+# Column 1 is the player id and column 28 is the response variable.
+Pitcher.Career.Statistics.pca = princomp(Pitcher.Career.Statistics[,2:27], cor = T) 
+biplot(Pitcher.Career.Statistics.pca)
+ggbiplot(Pitcher.Career.Statistics.pca, varname.size = 5, labels=row(Pitcher.Career.Statistics)[,1])
+
+# Identifying Outlier
+barplot(Pitcher.Career.Statistics.pca$loadings[,2])
+summary(Pitcher.Career.Statistics[,which(Pitcher.Career.Statistics.pca$loadings[,2] > 0.2)])
+Pitcher.Career.Statistics[953,which(Pitcher.Career.Statistics.pca$loadings[,2] > 0.2)]
+boxplot(Pitcher.Career.Statistics$BFP)
+
+# Removing Outlier which is observation 953.
+Pitcher.Career.Statistics.pca = princomp(Pitcher.Career.Statistics[-953,2:27], cor = T)
+
+biplot.fact(Pitcher.Career.Statistics.pca, Pitcher.Career.Statistics[-953,28])
+legend(15, 10, legend = c("HOF", "NO"), pch = c(18, 19), col = c("red", "blue"))
+```
+
+
+## Selecting Variables For Hypothesis
+Per the analysis done in the section above the variables I will select for my hypothesis as significant predictors towards identifying players who will be inducted into the Hall of Fame are: CG, W, SHO, IPouts, SO, BB, SH, and BFP. These Variables showed the most correlation in the Scatterplot Matrix and in the Box plot Indicators. The PCA biplots show a big clump of variables all pointing in the same direction as well as some orthogonal variables that are linearly uncorrelated. In the last biplot we can see a slight orthogonal direction taken in between the player who were inducted into the HOF and the players who were not. My hypothesis for this project will be that the variables I selected using visualization techniques will be better at predicting pitchers that get inducted into the Hall of Fame than the significant variables from the main effects model.
+
+
+## Main Effects and Null Model
+```{r, tidy=TRUE, tidy.opts=list(width.cutoff=60)}
+# Setting up Main effect model
+pitch <- copy(Pitcher.Career.Statistics)
+pitch$playerID <- NULL # Getting rid of playerID column.
+pitch.glm.main <- glm(inducted~., data = pitch, family = binomial)
+summary(pitch.glm.main)
+
+# Setting up Null Model
+pitch.null <- glm(inducted~1, data = pitch, family = binomial)
+summary(pitch.null)
+
+anova(pitch.null, pitch.glm.main, test = "Chi")
+#pitch.glm.main is the better model compared to pitch.null.
+```
+
+In the section above the main effects model and the null model are set up for testing. When compared to the null model the main effect model performs better than the null model with a big decrease in the residual deviance meaning that we can reject the null hypothesis based on this information. In the main effects model we see a total of seven variables that are significant, meaning that there may be some multicollinearity present here but not enough to where none of the variables are significant. The seven variables that were marked as significant in the main effect model are CG, SHO, SV, HR, IBB, BK, and SH. Of theses seven only SHO and BK have a negative relationship with the model while the rest have positive relationships. Three of these variable match with the ones I came up with in my hypothesis: CG, W, SHO, IPouts, SO, BB, SH, and BFP. In the following sections we will see how the significant main effect indicators perform against those indicators that I selected in my hypothesis and which have more accurate predictions.
+
+## Model Utility
+```{r, tidy=TRUE, tidy.opts=list(width.cutoff=60)}
+# Setting up model with selected variables based on visualizations.
+pitch.glm.select <- glm(inducted~IPouts+W+SHO+BB+SH+CG+SO+BFP, data = pitch, family = binomial)
+# Setting up model with significant variables based on the main effects model.
+pitch.main.sig <- glm(inducted~CG+SHO+SV+HR+IBB+BK+SH, data = pitch, family = binomial)
+summary(pitch.glm.select)
+
+anova(pitch.null, pitch.glm.select, test = "Chi")
+
+anova(pitch.main.sig,pitch.glm.select, test = "Chi")
+
+# Setting up Log of the models above.
+Lpitch <- log(pitch[,-27] +.1)
+
+Lpitch$inducted <- pitch$inducted
+
+Lpitch.glm.select <- glm(inducted~IPouts+W+SHO+BB+SH+CG+SO+BFP, data = Lpitch, family = binomial)
+
+Lpitch.glm.sig <- glm(inducted~CG+SHO+SV+HR+IBB+BK+SH, data = Lpitch, family = binomial)
+
+anova(Lpitch.glm.sig,Lpitch.glm.select, test = "Chi")
+
+```
+
+In the Model Utility Section we set up two glm models, one with the selected variables from our hypothesis and the other with variables that were significant from the main effect model. The selected variables summary has good indicators that our model is significant. We compare the model with the selected variables to our null model and we see that the selected variables model performs better than our null mode, therefore we can reject the null. Now when comparing the selected model with the significant model the selected model performs better but not by much when comparing the residual deviances, so therefore we cannot fully reject the significant model and would be worth keeping it and seeing how it performs during predictions. The p-value we got here is the best value yet doing the chi- squared tests. When doing the log of these models we find similar results in the sense that there is no big difference in the Residual Differences but the P-value for the selected is better than that of the p-value for the normal selected model It is also observed that the residual differences are also higher in the log models when compared to the lower models, we will keep these models to perform predictions with them as well.
+
+## Test and Training Sets
+```{r, tidy=TRUE, tidy.opts=list(width.cutoff=60)}
+# Setting up test and training sets.
+set.seed(123)
+Pitch <- test.set(pitch, .33)
+portions <- data.frame(dataset=c("Full","Train","Test",
+                                 "Full","Train","Test"),
+                       class=c("HOF","HOF","HOF",
+                               "NO","NO","NO"),
+                       portion=c(sum(pitch$inducted) / length(pitch$inducted),
+                                 sum(Pitch$train$inducted) / length(Pitch$train$inducted),
+                                 sum(Pitch$test$inducted )/ length(Pitch$test$inducted),
+                                 1-sum(pitch$inducted) / length(pitch$inducted),
+                                 1-sum(Pitch$train$inducted) / length(Pitch$train$inducted),
+                                 1-sum(Pitch$test$inducted) / length(Pitch$test$inducted)))
+
+ggplot(portions, aes(x=dataset,y=portion,fill=class)) + geom_bar(stat="identity")
+```
+
+The training model that was set up using a test set comprised of a third of the data. The Training model has a similar portions as the full and test data, therefore it will be used to train our model.
+
+## GLM Utility with Training Data
+```{r, tidy=TRUE, tidy.opts=list(width.cutoff=60)}
+# Trained model with variables selected.
+pitch.glm.select.train <- glm(inducted~IPouts+W+SHO+BB+SH+CG+SO+BFP, data = Pitch$train, family = binomial)
+
+# Trained model with significant variables from main.
+pitch.glm.sig.train <- glm(inducted~CG+SHO+SV+HR+IBB+BK+SH, data = Pitch$train, family = binomial) 
+
+pitch.null <- glm(inducted~1, data = Pitch$train, family = binomial)
+
+# pitch.glm.select.train model is significant enough to where we can reject our null hypothesis.
+anova(pitch.null, pitch.glm.select.train, test = "Chi")
+
+anova(pitch.glm.sig.train, pitch.glm.select.train, test = "Chi")
+
+# Setting up log training models.
+LPitch.train <- log(Pitch$train[,-27] + .1)
+
+LPitch.train$inducted <- Pitch$train$inducted
+
+LPitch.glm.select.train <- glm(inducted~IPouts+W+SHO+BB+SH+CG+SO+BFP, LPitch.train, family = binomial)
+
+LPitch.glm.sig.train <- glm(inducted~CG+SHO+SV+HR+IBB+BK+SH, LPitch.train, family = binomial)
+
+LPitch.null <- glm(inducted~1, data = LPitch.train, family = binomial)
+
+anova(LPitch.glm.sig.train, LPitch.glm.select.train, test = "Chi")
+
+#Setting up PCA Training models.
+Pitch.pca <- princomp(Pitch$train[,-27], cor = T)
+
+Pitchpca.glm90 <- pc.glm(Pitch.pca, 90, Pitch$train$inducted)
+
+Pitchpca.glm98 <- pc.glm(Pitch.pca, 98, Pitch$train$inducted)
+
+anova(Pitchpca.glm90, Pitchpca.glm98, test = "Chi")
+
+
+# Comparing Models
+AIC(pitch.glm.select.train)
+AIC(pitch.glm.sig.train)
+AIC(LPitch.glm.select.train)
+AIC(LPitch.glm.sig.train)
+AIC(Pitchpca.glm98)
+AIC(Pitchpca.glm90)
+
+BIC(pitch.glm.select.train)
+BIC(pitch.glm.sig.train)
+BIC(LPitch.glm.select.train)
+BIC(LPitch.glm.sig.train)
+BIC(Pitchpca.glm98)
+BIC(Pitchpca.glm90)
+```
+
+In the section above the Training data is used to train the selected and significant models. When performing a Chi squared test with the trained null model the model with the selected variables performs well enough to where we can reject the null. Chi squared tests were run on the significant and selected models of both the log and normal models. The results with Trained models using the test set is less significant in both models compared to our models that are not using the test set. While there is no large difference with the residual difference in the normal model of the two there is a large difference between the log of the significant and the log of the selected. PCA regression models using 90% and 98% of variability will be used as predictors as well, when performing the Chi squared test on both the 90% and 98% models we find that there is no major difference in the residual deviances and that the 98% is more significant. Looking at the AIC for all of our predictor models we set up we find that the selected model and the PCA98 model perform the best out of the six models being evaluated. When comparing the BIC values we see that the significant model and the PCA98 model are best. All these models will be evaluated in the next section.
+
+## Model Evaluation
+```{r, tidy=TRUE, tidy.opts=list(width.cutoff=60)}
+# Plotting the six models diagnostic plots.
+
+autoplot(pitch.glm.select.train)
+
+autoplot(LPitch.glm.select.train)
+
+autoplot(pitch.glm.sig.train)
+
+autoplot(LPitch.glm.sig.train)
+
+autoplot(Pitchpca.glm98)
+
+autoplot(Pitchpca.glm90)
+
+# Setting up the predictions for each model.
+pitch.pred.select <- predict(pitch.glm.select.train, type = "response", newdata =Pitch$test)
+summary(pitch.pred.select)
+
+Lpitch.test <- log(Pitch$test[,-27] +.1)
+
+Lpitch.pred.select <- predict(LPitch.glm.select.train, type = "response", newdata = Lpitch.test)
+summary(Lpitch.pred.select)
+
+pitch.pred.sig <- predict(pitch.glm.sig.train, type = "response", newdata =Pitch$test)
+summary(pitch.pred.sig)
+
+Lpitch.pred.sig <- predict(LPitch.glm.sig.train, type = "response", newdata = Lpitch.test)
+summary(Lpitch.pred.sig)
+
+pitchpca.pred98 <- predict.pc.glm(Pitchpca.glm98, Pitch.pca, Pitch$test[,1:26] )
+
+pitchpca.pred90 <- predict.pc.glm(Pitchpca.glm90, Pitch.pca, Pitch$test[,1:26] )
+
+# Observing the score tables for each set of predictions.
+score.table(pitch.pred.select, Pitch$test$inducted, .5)
+
+score.table(Lpitch.pred.select, Pitch$test$inducted, .5)
+
+score.table(pitch.pred.sig, Pitch$test$inducted, .5)
+
+score.table(Lpitch.pred.sig, Pitch$test$inducted, .5)
+
+score.table(pitchpca.pred98, Pitch$test$inducted, .5)
+
+score.table(pitchpca.pred90, Pitch$test$inducted, .5)
+```
+
+When looking at all the diagnostic plots for the six models we see that all the models have non-gaussian tails in the Q-Q plot, some better than others with the most gaussian being the log of the selected model. When looking at the score tables we see similarities with all the models having 5 or 4 False Negatives and 1 or 0 True Positives. The best predictors based on the score table are the PCA98, PCA90, and the significant models.
+
+## ROC Curves
+```{r, tidy=TRUE, tidy.opts=list(width.cutoff=60)}
+# Setting up ROC plots.
+roc.plot.gg <- plot.roc.gg(pitch.pred.select, Pitch$test$inducted, "Selected")
+roc.plot.gg <- lines.roc.gg(roc.plot.gg, Lpitch.pred.select, Pitch$test$inducted, "Log Selected")
+roc.plot.gg <- lines.roc.gg(roc.plot.gg, pitchpca.pred98, Pitch$test$inducted, "PCA98")
+roc.plot.gg <- lines.roc.gg(roc.plot.gg, pitchpca.pred90, Pitch$test$inducted, "PCA90")
+roc.plot.gg <- lines.roc.gg(roc.plot.gg, pitch.pred.sig, Pitch$test$inducted, "Significant")
+roc.plot.gg <- lines.roc.gg(roc.plot.gg, Lpitch.pred.sig, Pitch$test$inducted, "Log Significant")
+
+roc.plot.gg
+
+library(mltools)
+
+# Setting up Data Frame with best current pitcher to determine which ones will be inducted into the Hall of Fame.
+Favorite.Pitchers <- copy(Pitcher.Career.Statistics)
+
+which(Favorite.Pitchers$playerID == "scherma01", arr.ind=TRUE)
+which(Favorite.Pitchers$playerID == "strasst01", arr.ind=TRUE)
+which(Favorite.Pitchers$playerID == "bumgama01", arr.ind=TRUE)
+which(Favorite.Pitchers$playerID == "kershcl01", arr.ind=TRUE)
+which(Favorite.Pitchers$playerID == "degroja01", arr.ind=TRUE)
+which(Favorite.Pitchers$playerID == "verlaju01", arr.ind=TRUE)
+which(Favorite.Pitchers$playerID == "salech01", arr.ind=TRUE)
+which(Favorite.Pitchers$playerID == "greinza01", arr.ind=TRUE)
+which(Favorite.Pitchers$playerID == "colonba01", arr.ind=TRUE)
+
+Favorite.Pitchers <- Pitcher.Career.Statistics[ c(3534,3788,3569,3480,4238,3164,3778,3004,2172), ]
+
+# Predictions of trained selected model using test data.
+Pitch.test <- Pitch$test
+predicted_values_selected = predict(pitch.glm.select.train, type = "response", newdata = Pitch.test)
+summary(predicted_values_selected)
+auc_roc(predicted_values_selected, Pitch.test$inducted)
+predicted_values_selected_df = as.data.frame(predicted_values_selected)
+
+# Predictions of trained significant model using test data.
+predicted_values_sig = predict(pitch.glm.sig.train, type = "response", newdata = Pitch.test)
+summary(predicted_values_sig)
+auc_roc(predicted_values_sig, Pitch.test$inducted)
+predicted_values_sig_df = as.data.frame(predicted_values_sig)
+
+# Predictions of trained selected model using Favorite.Pitchers data frame of the best current pitchers.
+predicted_values_selected_Favorites = predict(pitch.glm.select.train, type = "response", newdata = Favorite.Pitchers)
+predicted_values_selected_Favorites_df = as.data.frame(predicted_values_selected_Favorites)
+Favorite.Pitchers
+predicted_values_selected_Favorites_df
+```
+
+# 3. Conclusions
+When looking at the ROC curves we see that the selected , significant , PCA90, and PCA98 model perform best while the log models perform worse and would be a poor classifier as they are closer to the diagonal with the Log of the selected being directly on the diagonal. When looking at the area under the ROC curve for both the selected variables and the significant variables we see that the significant trained model has a fair accuracy with 0.7439616 while the selected trained model has a good accuracy with 0.8643341. This concludes that the selected model with indicators chosen through visualization is better than the significant variables indicated by the main effects model. The hypothesis was achieved as the selected variable models were better at making predictions than the significant variable models.
+
+Using the selected model I made a data frame of the best current pitchers to see what the predicted values would be for each pitcher to see if they would get into the Hall of Fame. Looking at the Favorite.Pitchers data frame from the top I chose the following pitchers: Max Scherzer, Stephen Strasburg, Madison Bumgarner, Clayton Kershaw, Jacob deGrom, Justin Verlander, Chris Sale, Zack Greinke, and Bartolo Colon. Based on the predicted_values_selected_Favorites_df (same order from top down as the Favorite.Pitchers table) table the pitcher with the best probability to be inducted into the Hall of Fame is Clayton Kershaw. My favorite pitcher Max Scherzer would have a 23% chance of making the Hall of Fame based on his career statistics as of 2019. I would argue that most of these statistics should be higher and that most of these pitchers would go on to become hall of famers when eligible so I personally disagree with the way the model is giving predictions. Also coming into this project I had a bias thinking that ERA, SO, and BAOpp would definitely be among the variables that would be considered to be good indicators as these are stats pitchers are normally judged by. While SO was considered a good indicator, ERA and BAopp where not during the visualization phase probably because these values are averages and the lower they are the better the pitcher is considered to be. I definitely think the limited number of pitchers that got inducted into the HOF after my filtering and cleaning of the data (24 pitchers) definitely affected what variables were considered significant. Some of the 24 pitchers in my data where also at the end of their careers at the earlier year of my data and my analysis did not take into consideration the earlier years of their career and that might have neglected predictors that were actually significant. Having a larger sample of pitchers who are in the Hall of Fame give more insight as to which variables are the best predictors.
+
+Future work done with this data set would be to take a deeper dive into the other datasets and seeing how I can bring in that data to here, I am interested to see if total salary is a good indicator for HOF also if the number of awards won by the player as well. Due to time constraints I did not want to go through the time to develop the R code to bring that data into to my project.
+
+
+# 4. References
+1. Lahman's Baseball Database: http://www.seanlahman.com/baseball-archive/statistics This database is copyright 1996-2021 by Sean Lahman.
